@@ -69,7 +69,7 @@ struct utility_value
 } u_cl, u_rl, u_prev; // u_prev应该存放的是历史最佳
 double u_optimal = 0.0;
 
-/****************************************/ 
+/****************************************/
 dq_sage<double> rtt_s(SHORT_WIN);
 dq_sage<double> rtt_m(MID_WIN);
 dq_sage<double> rtt_l(LONG_WIN);
@@ -229,150 +229,67 @@ void *CntThread(void *i)
         return ((void *)0);
     }
     // 状态标志
-    bool got_no_zero = false; // 本回合收到0字节
     bool slow_start_passed = false;
 
-    // // 读取值
-    // char message[1000];
-    // int msg_id = 657;
-    int get_info_error_counter = 0;
-
-    // // sage-rl 所需参数
-    // char *shared_memory_rl2 = (char *)malloc(strlen(shared_memory_rl));
-    // u64 pre_bytes_acked = 0, pre_bytes_sent = 0, pre_pkt_dlv = 0,
-    //     pre_pkt_lost = 0;
-    // u64 max_delivery_rate = 0, max_sending_rate = 0;
-    // double dr_mbps = 0.0, l_mbps = 0.0, pre_dr_mbps = 0.0, sr_mbps = 0.0;
-    // double dr_max_mbps = 1.0, pre_dr_max_mbps = 1.0;
-
-    // double cwnd_rate = 1.0;
-
-    // dq_sage<u64> sending_rates(WIN_SIZE * 10);
-
-    // dq_sage<double> rtt_s(SHORT_WIN);
-    // dq_sage<double> rtt_m(MID_WIN);
-    // dq_sage<double> rtt_l(LONG_WIN);
-
-    // dq_sage<double> lost_s(SHORT_WIN); // x = lost pkts / 1000
-    // dq_sage<double> lost_m(MID_WIN);
-    // dq_sage<double> lost_l(LONG_WIN);
-
-    // dq_sage<double> inflight_s(SHORT_WIN); // x = inflight pkts / 1000
-    // dq_sage<double> inflight_m(MID_WIN);
-    // dq_sage<double> inflight_l(LONG_WIN);
-
-    // dq_sage<double> thr_s(SHORT_WIN);
-    // dq_sage<double> thr_m(MID_WIN);
-    // dq_sage<double> thr_l(LONG_WIN);
-
-    // dq_sage<double> rtt_rate_s(SHORT_WIN);
-    // dq_sage<double> rtt_rate_m(MID_WIN);
-    // dq_sage<double> rtt_rate_l(LONG_WIN);
-
-    // dq_sage<double> rtt_var_s(SHORT_WIN);
-    // dq_sage<double> rtt_var_m(MID_WIN);
-    // dq_sage<double> rtt_var_l(LONG_WIN);
-
-    // dq_sage<u64> sent_db(100); // sent delta bytes
-    // dq_sage<u64> dlv_db(100);  // delivered delta bytes
-    // dq_sage<u64> loss_db(100); // lost delta bytes
-    // dq_sage<u64> uack_db(100); // inflight bytes
-    // dq_sage<u64> sent_dt(100); // delta time
-
-    // dq_sage<double> dr_w(200);
-    // dq_sage<double> rtt_w(200);
-
-    u64 dt_pre = timestamp();
-    u64 pre_calculation_time = timestamp();
-    // u64 t0 = timestamp();
-    // u64 dt = 0;
-
-    usleep(20 * 1000); // 直接20ms 可以替换为report_period
     while (send_traffic)
-    {   
-        got_no_zero = false;
-
+    {
         update_tcp_info(0);
-        if (info.tcpi_rtt > 0)
+        if (!slow_start_passed)
         {
-            // 首先判断慢启动是否退出
-            if (!slow_start_passed)
-            {
-                slow_start_passed = (info.tcpi_snd_ssthresh < info.tcpi_snd_cwnd) ? 1 : 0;
-                dt_pre = timestamp();
-                pre_calculation_time = timestamp();
-                usleep(min_rtt / 2);
-                continue;
-            }
-        }
-        update_tcp_info(0); // 时间过去了一会，更新一下info
-        // 1. evaluation stage
-        // 先更新prev，再更新u_rl和u_cl
-        if (u_prev.utility == 0)
-        {
-            u_prev.cwnd = u_cl.cwnd < u_rl.cwnd ? u_cl.cwnd : u_rl.cwnd;
-        }
-        // 当前rl的cwnd存在target_ratio中，开始挑选最佳CWND
-        u_rl.cwnd = target_ratio;
-        u_cl.cwnd = info.tcpi_snd_cwnd;
-        struct utility_value *first_run = u_cl.cwnd < u_rl.cwnd ? &u_cl : &u_rl;
-        struct utility_value *second_run = u_cl.cwnd < u_rl.cwnd ? &u_rl : &u_cl;
-        // TODO: rtt_m尝试换多个dq测试
-        u32 ONE_WAY_DELAY = static_cast<u32>(get_avg_rtt(rtt_m) / 2);
-        // TODO: rtt_m换0->估计上个RTT收到了多少个数据包，再取平均值
-        if (first_run != NULL && second_run != NULL)
-        {
-            set_cwnd(first_run->cwnd, 0);
-            usleep(ONE_WAY_DELAY);
-            set_cwnd(second_run->cwnd, 0);
-            usleep(ONE_WAY_DELAY);
-            set_cwnd(u_prev.cwnd, 0);
-            update_utility_value(u_prev.cwnd, &u_prev, rtt_m); // 1RTT时取prev的RTT
-            usleep(ONE_WAY_DELAY);
-            update_utility_value(first_run->cwnd, first_run,
-                                 rtt_m); // 1.5RTT取first_run的u
-            usleep(ONE_WAY_DELAY);
-            update_utility_value(second_run->cwnd, second_run,
-                                 rtt_m); // 2 RTT取second_run的u
-        }
-        else
-        {
-            DBGPRINT(DBGSERVER, 0, "Get pointer failed!");
-            return ((void *)0);
+            slow_start_passed = (info.tcpi_snd_ssthresh < info.tcpi_snd_cwnd) ? 1 : 0;
+            usleep(min_rtt / 2);
+            continue;
         }
 
-        // 2. calculating the optimal rate
-        int situation = get_situation();
-        u64 optimal_cwnd = get_optimal_cwnd(situation);
-        u_prev.cwnd = optimal_cwnd;
+        set_cwnd(target_ratio, 0);
+        usleep(min_rtt / 2);
 
-        // PROBING
-        // 3. check whether enter probing or acceleration stage
-        update_confidence_val(u_cl);
-        update_confidence_val(u_rl);
-        /*****************************/
-        FILE *file = fopen("/home/snow/pantheon-available/src/experiments/log.txt", "a");
-        if (file)
-        {
-            fprintf(file, "Current rtt = %u\n", ONE_WAY_DELAY);
-            fprintf(file, "cwnd of cl, rl, prev are : %lu, %lu, %lu\n", u_cl.cwnd, u_rl.cwnd, u_prev.cwnd);
-            fprintf(file, "optimal_cwnd is : %lu\n", optimal_cwnd);
-            // fprintf(file, "utility of optimal, cl, rl, prev are : %.2f,%.2f,%.2f,%.2f\n", u_optimal, u_cl.utility, u_rl.utility, u_prev.utility);
-            fprintf(file, "utility of, cl, rl, prev are : %.2f,%.2f,%.2f\n", u_cl.utility, u_rl.utility, u_prev.utility);
-            fprintf(file, "confidence val of optimal, cl, rl, prev are : %.2f,%.2f\n", u_cl.confidence_val, u_rl.confidence_val);
-        }
-        fclose(file);
-        // u32 ONE_WAY_DELAY = static_cast<u32>(get_avg_rtt(rtt_m) * 6);
-        // u_rl.cwnd = target_ratio;
-        // set_cwnd(target_ratio, 0);
-        // usleep(ONE_WAY_DELAY);
-        // FILE *file = fopen("/home/snow/pantheon-available/src/experiments/log.txt", "a");
-        // if (file)
+        // if (info.tcpi_rtt > 0)
         // {
-        //     fprintf(file, "cwnd of rl is : %lu\n", u_rl.cwnd);
-        // }
-        // fclose(file);
-        /*****************************/
+        //     // 1. evaluation stage
+        //     // 先更新prev，再更新u_rl和u_cl
+        //     if (u_prev.utility == 0)
+        //     {
+        //         u_prev.cwnd = u_cl.cwnd < u_rl.cwnd ? u_cl.cwnd : u_rl.cwnd;
+        //     }
+        //     // 当前rl的cwnd存在target_ratio中，开始挑选最佳CWND
+        //     u_rl.cwnd = target_ratio;
+        //     u_cl.cwnd = info.tcpi_snd_cwnd;
+        //     struct utility_value *first_run = u_cl.cwnd < u_rl.cwnd ? &u_cl : &u_rl;
+        //     struct utility_value *second_run = u_cl.cwnd < u_rl.cwnd ? &u_rl : &u_cl;
+        //     // TODO: rtt_m尝试换多个dq测试
+        //     u32 ONE_WAY_DELAY = static_cast<u32>(get_avg_rtt(rtt_m) / 2);
+        //     // TODO: rtt_m换0->估计上个RTT收到了多少个数据包，再取平均值
+        //     if (first_run != NULL && second_run != NULL)
+        //     {
+        //         set_cwnd(first_run->cwnd, 0);
+        //         usleep(ONE_WAY_DELAY);
+        //         set_cwnd(second_run->cwnd, 0);
+        //         usleep(ONE_WAY_DELAY);
+        //         set_cwnd(u_prev.cwnd, 0);
+        //         update_utility_value(u_prev.cwnd, &u_prev, rtt_m); // 1RTT时取prev的RTT
+        //         usleep(ONE_WAY_DELAY);
+        //         update_utility_value(first_run->cwnd, first_run,
+        //                              rtt_m); // 1.5RTT取first_run的u
+        //         usleep(ONE_WAY_DELAY);
+        //         update_utility_value(second_run->cwnd, second_run,
+        //                              rtt_m); // 2 RTT取second_run的u
+        //     }
+        //     else
+        //     {
+        //         DBGPRINT(DBGSERVER, 0, "Get pointer failed!");
+        //         return ((void *)0);
+        //     }
+
+        // // 2. calculating the optimal rate
+        // int situation = get_situation();
+        // u64 optimal_cwnd = get_optimal_cwnd(situation);
+        // u_prev.cwnd = optimal_cwnd;
+
+        // // PROBING
+        // // 3. check whether enter probing or acceleration stage
+        // update_confidence_val(u_cl);
+        // update_confidence_val(u_rl);
         // if (u_cl.confidence_val >= ETA_OFF && u_rl.confidence_val >= ETA_OFF)
         // {
         //     // PROBING
@@ -417,14 +334,7 @@ void *CntThread(void *i)
         //             set_cwnd(++optimal_cwnd, 0);
         //         }
         //     }
-            // get_tcp_info(0);
-            // pre_bytes_acked = static_cast<double>(info.tcpi_bytes_acked);
-            // t0 = timestamp(); // 退出阶段之后要运行一个rtt 用于数据统计
-            // usleep(avg_rtt);
-            // TODO: 是否要改为一个RTT推一次数据
-        // }
-
-    } // endwhile send_traffic
+    }
     shmdt(shared_memory);
     shmctl(shmid, IPC_RMID, NULL);
     shmdt(shared_memory_rl);
@@ -627,26 +537,20 @@ void *RLThread(void *information)
     u64 pre_calculation_time = timestamp();
     u64 t0 = timestamp();
     u64 dt = 0;
+    u64 ts_begin = timestamp();
+    u64 ts_last = timestamp();
 
-    while(true)
+    while (true)
     {
-        usleep(10);
+        usleep(10000);
         got_no_zero = false;
+        update_tcp_info(0);
         // 向内存中传值
         while (!got_no_zero && send_traffic)
         {
             // update_tcp_info(0);
             if (info.tcpi_rtt > 0)
             {
-                // // 首先判断慢启动是否退出
-                // if (!slow_start_passed)
-                // {
-                //     slow_start_passed = (info.tcpi_snd_ssthresh < info.tcpi_snd_cwnd) ? 1 : 0;
-                //     dt_pre = timestamp();
-                //     pre_calculation_time = timestamp();
-                //     usleep(min_rtt / 2);
-                //     continue;
-                // }
 
                 u64 d_dp = info.tcpi_delivered - pre_pkt_dlv; // 这段时间发送的包数
                 u64 d_db = d_dp * mss_cache;                  // 这段时间送达的字节数
@@ -657,14 +561,21 @@ void *RLThread(void *information)
 
                 if (info.tcpi_bytes_acked - pre_bytes_acked > 0 || d_db > 0)
                 {
+                    FILE *file = fopen("/home/snow/pantheon-available/src/experiments/duration.txt", "a");
+                    if (file)
+                    {
+                        fprintf(file, "time = %u, duration = %u\n", timestamp() - ts_begin, timestamp() - ts_last);
+                    }
+                    fclose(file);
+                    ts_last = timestamp();
                     dt = timestamp() - dt_pre; // 单位是us
                     dt = (dt > 0) ? dt : 1;    // 时间相差要在1us以上
                     dt_pre = timestamp();
 
                     s_db = info.tcpi_bytes_sent - pre_bytes_sent; // sent bytes
                     l_db = (info.tcpi_lost > pre_pkt_lost)
-                                ? (info.tcpi_lost - pre_pkt_lost) * info.tcpi_snd_mss
-                                : 0; // lost bytes
+                               ? (info.tcpi_lost - pre_pkt_lost) * info.tcpi_snd_mss
+                               : 0; // lost bytes
 
                     uack_db.add((u64)info.tcpi_unacked * mss_cache);
                     sent_db.add(s_db);
@@ -731,11 +642,11 @@ void *RLThread(void *information)
                     rtt_var_l.add((double)info.tcpi_rttvar / 1000.0);
 
                     thr_s.add((double)info.tcpi_delivery_rate / 125000.0 /
-                                BW_NORM_FACTOR);
+                              BW_NORM_FACTOR);
                     thr_m.add((double)info.tcpi_delivery_rate / 125000.0 /
-                                BW_NORM_FACTOR);
+                              BW_NORM_FACTOR);
                     thr_l.add((double)info.tcpi_delivery_rate / 125000.0 /
-                                BW_NORM_FACTOR);
+                              BW_NORM_FACTOR);
 
                     inflight_s.add((double)info.tcpi_unacked / 1000.0);
                     inflight_m.add((double)info.tcpi_unacked / 1000.0);
@@ -816,7 +727,7 @@ void *RLThread(void *information)
                             dr_max_mbps / BW_NORM_FACTOR,
                             // 68
                             (cwnd_rate > 0.0) ? round(log2f(cwnd_rate) * 1000) / 1000.
-                                                : log2f(0.0001));
+                                              : log2f(0.0001));
 
                     pre_dr_mbps = dr_mbps;
                     pre_dr_max_mbps = dr_max_mbps;
@@ -916,7 +827,7 @@ void *RLThread(void *information)
                     if (get_new_alpha_error_counter > 1000)
                     {
                         DBGPRINT(DBGSERVER, 0, "still no new value, id:%d prev_id:%d\n",
-                                    pre_id_tmp, pre_id);
+                                 pre_id_tmp, pre_id);
                         get_new_alpha_error_counter = 0;
                     }
                     get_new_alpha_error_counter++;
