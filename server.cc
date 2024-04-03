@@ -23,7 +23,7 @@
 #define MAX_CWND 10000
 #define MIN_CWND 4
 #define CWND_THRESHOLD 2 // CWND变化最小值
-#define RTT_LENGTH 20
+#define RTT_LENGTH 50
 // 内核接口
 #define TCP_CWND 38
 #define TCP_CWND_USER 39
@@ -34,8 +34,8 @@
 #define EXPONENT_T 0.9
 #define ALPHA 10
 #define BETA 1
-#define LAMBDA 11.35
-#define MU 0.1 // RTT的震荡范围
+#define LAMBDA 2 //11.35
+#define MU 0.2 //0.1 // RTT的震荡范围
 // 置信度
 #define THETA 0.05
 #define ETA_ON 0.8
@@ -60,6 +60,7 @@
 struct tcp_info info, info_pre;
 u32 mss_cache = 1460;
 u32 min_rtt = 0;
+uint32_t his_rtts[RTT_LENGTH]; // 最近RTT历史记录
 struct utility_value
 {
     u64 cwnd = 10;
@@ -94,26 +95,71 @@ void set_cwnd(u64 cwnd, int index)
         perror("setsockopt: set cwnd\n");
 }
 
-double get_delta_rtt(dq_sage<double> &dq)
+void update_his_rtts(int index)
 {
-    int len = dq.get_size();
-    len = (len / 2) * 2;
+    socklen_t length = sizeof(his_rtts);
+    if (getsockopt(sock_for_cnt[index], IPPROTO_TCP, TCP_RTTS, &his_rtts[0], &length) < 0)
+        perror("getsockopt_his_rtts\n");
+}
+
+// double get_delta_rtt(dq_sage<double> &dq)
+// {
+//     int len =  20; //dq.get_size();
+//     len = (len / 2) * 2;
+//     double res = 0.0;
+//     for (int i = 0; i < (len / 2); i++)
+//         res += dq[i];
+//     for (int i = (len / 2); i < len; i++)
+//         res -= dq[i];
+//     if (min_rtt)
+//         return (res * 100000.0 / static_cast<double>(min_rtt) / (len / 2));
+//     else
+//         DBGMARK(DBGSERVER, 0, "ERROR: GET_DELTA_RTT MIN_RTT=0");
+//     return 0;
+// }
+
+// double get_avg_rtt(dq_sage<double> &dq)
+// {
+//     // 单位为us
+//     return (double)dq.get_avg() * 100000.0;
+// }
+void print_rtt()
+{
+    FILE *file = fopen("/home/snow/pantheon-available/src/experiments/log.txt", "a");
+    for(int i = 0; i < RTT_LENGTH; i++){
+        if (file){
+            fprintf(file, "%d ", his_rtts[i]);
+        }
+    }
+    fprintf(file, "\n");
+    fclose(file);
+}
+
+double get_delta_rtt()
+{
+    print_rtt();
     double res = 0.0;
-    for (int i = 0; i < (len / 2); i++)
-        res += dq[i];
-    for (int i = (len / 2); i < len; i++)
-        res -= dq[i];
+    int len = (RTT_LENGTH / 2);
+    for (int i = len; i < RTT_LENGTH; i++)
+        res += his_rtts[i];
+    for (int i = 0; i < (RTT_LENGTH / 2); i++)
+        res -= his_rtts[i];
     if (min_rtt)
-        return (res * 100000.0 / static_cast<double>(min_rtt) / (len / 2));
+        return (res / static_cast<double>(min_rtt) / 10);
     else
         DBGMARK(DBGSERVER, 0, "ERROR: GET_DELTA_RTT MIN_RTT=0");
     return 0;
 }
 
-double get_avg_rtt(dq_sage<double> &dq)
+double get_avg_rtt()
 {
-    // 单位为us
-    return (double)dq.get_avg() * 100000.0;
+    uint32_t sum = 0;
+    for (int i = 0; i < RTT_LENGTH; i++)
+        if (his_rtts[i])
+            sum += his_rtts[i];
+
+    return static_cast<double>(sum) / RTT_LENGTH;
+    // 内核中的rtt估计采用的是7/8旧+1/8新
 }
 
 void update_confidence_val(utility_value &u)
@@ -139,21 +185,21 @@ u64 get_optimal_cwnd(int situation)
         optimal_cwnd = utilities[0].cwnd - 1;
         break;
     case 1:
-        if (utilities[1].cwnd - utilities[0].cwnd <= CWND_THRESHOLD)
+        // if (utilities[1].cwnd - utilities[0].cwnd <= CWND_THRESHOLD)
             optimal_cwnd = utilities[1].utility > utilities[0].utility
                                ? utilities[1].cwnd
                                : utilities[0].cwnd;
-        else
-            // equation 8
-            optimal_cwnd = (utilities[1].cwnd + utilities[0].cwnd) / 2;
+        // else
+        //     // equation 8
+        //     optimal_cwnd = (utilities[1].cwnd + utilities[0].cwnd) / 2;
         break;
     case 2:
-        if (utilities[2].cwnd - utilities[1].cwnd <= CWND_THRESHOLD)
+        // if (utilities[2].cwnd - utilities[1].cwnd <= CWND_THRESHOLD)
             optimal_cwnd = utilities[2].utility > utilities[1].utility
                                ? utilities[2].cwnd
                                : utilities[1].cwnd;
-        else
-            optimal_cwnd = (utilities[2].cwnd + utilities[1].cwnd) / 2;
+        // else
+        //     optimal_cwnd = (utilities[2].cwnd + utilities[1].cwnd) / 2;
         break;
     case 3:
         optimal_cwnd = utilities[2].cwnd + 1;
@@ -180,12 +226,13 @@ int get_situation()
 void update_utility_value(uint64_t cwnd, utility_value *u,
                           dq_sage<double> &dq)
 {
-    double d_rtt = get_delta_rtt(dq);
-    double a_rtt = get_avg_rtt(dq);
+    update_his_rtts(0);
+    double d_rtt = get_delta_rtt(); // get_delta_rtt(dq);
+    double a_rtt = get_avg_rtt(); // get_avg_rtt(dq);
     // 单位, 当前单位为MBps
     double rate = static_cast<double>(cwnd) * mss_cache / a_rtt;
 
-    if (d_rtt > 0.02)
+    if (d_rtt > 0.1) // 0.02
         u->isright = true;
     else
         u->isright = false;
@@ -193,19 +240,26 @@ void update_utility_value(uint64_t cwnd, utility_value *u,
     if (file)
     {
         fprintf(file, "d_rtt = %.6lf\n", d_rtt);
+        fprintf(file, "A = %.6lf\n", ALPHA * pow(rate, EXPONENT_T));
+        fprintf(file, "B = %.6lf\n", BETA * rate * max(0.0, d_rtt));
     }
-    fclose(file);
     u->utility = ALPHA * pow(rate, EXPONENT_T) -
                  BETA * rate * max(0.0, d_rtt); // 未添加对RTT绝对值的惩罚
     double ratio = a_rtt / static_cast<double>(min_rtt);
     if (ratio > (1 + MU))
     {
         u->utility -= LAMBDA * rate * ratio;
+        if (file)
+        {
+            fprintf(file, "ratio = %.6lf\n", ratio);
+            fprintf(file, "C = %.6lf\n", LAMBDA * rate * ratio);
+        }
     }
     if (u->utility > u_optimal)
     {
         u_optimal = u->utility;
     }
+    fclose(file);
 }
 
 void update_tcp_info(int index)
@@ -217,6 +271,7 @@ void update_tcp_info(int index)
         perror("getsockopt_tcp_info\n");
     mss_cache = info.tcpi_snd_mss;
     min_rtt = info.tcpi_min_rtt;
+    update_his_rtts(index);
 }
 
 void *CntThread(void *i)
@@ -237,103 +292,126 @@ void *CntThread(void *i)
         if (!slow_start_passed)
         {
             slow_start_passed = (info.tcpi_snd_ssthresh < info.tcpi_snd_cwnd) ? 1 : 0;
-            usleep(min_rtt / 2);
+            // usleep(min_rtt / 2);
             continue;
         }
+        set_cwnd(info.tcpi_snd_cwnd, 0);
+        // set_cwnd(target_ratio, 0);
+        // usleep(min_rtt / 2);
 
-        set_cwnd(target_ratio, 0);
-        usleep(min_rtt / 2);
+        if (info.tcpi_rtt > 0)
+        {
+            // 1. evaluation stage
+            // 先更新prev，再更新u_rl和u_cl
+            if (u_prev.utility == 0)
+            {
+                u_prev.cwnd = u_cl.cwnd < u_rl.cwnd ? u_cl.cwnd : u_rl.cwnd;
+            }
+            // 当前rl的cwnd存在target_ratio中，开始挑选最佳CWND
+            u_rl.cwnd = target_ratio;
+            u_cl.cwnd = info.tcpi_snd_cwnd;
+            struct utility_value *first_run = u_cl.cwnd < u_rl.cwnd ? &u_cl : &u_rl;
+            struct utility_value *second_run = u_cl.cwnd < u_rl.cwnd ? &u_rl : &u_cl;
+            // TODO: rtt_m尝试换多个dq测试
+            u32 ONE_WAY_DELAY = static_cast<u32>(get_avg_rtt() / 2);
+            // TODO: rtt_m换0->估计上个RTT收到了多少个数据包，再取平均值
+            if (first_run != NULL && second_run != NULL)
+            {
+                set_cwnd(first_run->cwnd, 0);
+                usleep(ONE_WAY_DELAY);
+                set_cwnd(second_run->cwnd, 0);
+                ONE_WAY_DELAY = static_cast<u32>(get_avg_rtt() / 2);
+                usleep(ONE_WAY_DELAY);
+                set_cwnd(u_prev.cwnd, 0);
+                update_utility_value(u_prev.cwnd, &u_prev, rtt_m); // 1RTT时取prev的RTT
+                ONE_WAY_DELAY = static_cast<u32>(get_avg_rtt() / 2);
+                usleep(ONE_WAY_DELAY);
+                update_utility_value(first_run->cwnd, first_run,
+                                     rtt_m); // 1.5RTT取first_run的u
+                ONE_WAY_DELAY = static_cast<u32>(get_avg_rtt() / 2);                     
+                usleep(ONE_WAY_DELAY);
+                update_utility_value(second_run->cwnd, second_run,
+                                     rtt_m); // 2 RTT取second_run的u
+            }
+            else
+            {
+                DBGPRINT(DBGSERVER, 0, "Get pointer failed!");
+                return ((void *)0);
+            }
 
-        // if (info.tcpi_rtt > 0)
-        // {
-        //     // 1. evaluation stage
-        //     // 先更新prev，再更新u_rl和u_cl
-        //     if (u_prev.utility == 0)
-        //     {
-        //         u_prev.cwnd = u_cl.cwnd < u_rl.cwnd ? u_cl.cwnd : u_rl.cwnd;
-        //     }
-        //     // 当前rl的cwnd存在target_ratio中，开始挑选最佳CWND
-        //     u_rl.cwnd = target_ratio;
-        //     u_cl.cwnd = info.tcpi_snd_cwnd;
-        //     struct utility_value *first_run = u_cl.cwnd < u_rl.cwnd ? &u_cl : &u_rl;
-        //     struct utility_value *second_run = u_cl.cwnd < u_rl.cwnd ? &u_rl : &u_cl;
-        //     // TODO: rtt_m尝试换多个dq测试
-        //     u32 ONE_WAY_DELAY = static_cast<u32>(get_avg_rtt(rtt_m) / 2);
-        //     // TODO: rtt_m换0->估计上个RTT收到了多少个数据包，再取平均值
-        //     if (first_run != NULL && second_run != NULL)
-        //     {
-        //         set_cwnd(first_run->cwnd, 0);
-        //         usleep(ONE_WAY_DELAY);
-        //         set_cwnd(second_run->cwnd, 0);
-        //         usleep(ONE_WAY_DELAY);
-        //         set_cwnd(u_prev.cwnd, 0);
-        //         update_utility_value(u_prev.cwnd, &u_prev, rtt_m); // 1RTT时取prev的RTT
-        //         usleep(ONE_WAY_DELAY);
-        //         update_utility_value(first_run->cwnd, first_run,
-        //                              rtt_m); // 1.5RTT取first_run的u
-        //         usleep(ONE_WAY_DELAY);
-        //         update_utility_value(second_run->cwnd, second_run,
-        //                              rtt_m); // 2 RTT取second_run的u
-        //     }
-        //     else
-        //     {
-        //         DBGPRINT(DBGSERVER, 0, "Get pointer failed!");
-        //         return ((void *)0);
-        //     }
+            // 2. calculating the optimal rate
+            int situation = get_situation();
+            u64 optimal_cwnd = get_optimal_cwnd(situation);
+            // u_prev.cwnd = optimal_cwnd;
 
-        // // 2. calculating the optimal rate
-        // int situation = get_situation();
-        // u64 optimal_cwnd = get_optimal_cwnd(situation);
-        // u_prev.cwnd = optimal_cwnd;
-
-        // // PROBING
-        // // 3. check whether enter probing or acceleration stage
-        // update_confidence_val(u_cl);
-        // update_confidence_val(u_rl);
-        // if (u_cl.confidence_val >= ETA_OFF && u_rl.confidence_val >= ETA_OFF)
-        // {
-        //     // PROBING
-        //     set_cwnd(optimal_cwnd, 0);
-        //     uint32_t avg_rtt = static_cast<uint32_t>(get_avg_rtt(rtt_m));
-        //     usleep(2 * avg_rtt);
-        //     // get_tcp_info(0);
-        //     // pre_bytes_acked = static_cast<double>(info.tcpi_bytes_acked);
-        //     // usleep(avg_rtt);
-        // }
-        // else
-        // {
-        //     // ACCELERATION
-        //     bool flag_cl = u_cl.confidence_val >= ETA_OFF;
-        //     bool flag_rl = u_rl.confidence_val >= ETA_OFF;
-        //     set_cwnd(optimal_cwnd, 0);
-        //     double avg_rtt =
-        //         static_cast<uint32_t>(get_avg_rtt(rtt_m) * 1.5); // 直接运行1.5个RTT
-        //     while (!flag_cl || !flag_rl)
-        //     {
-        //         usleep(avg_rtt);
-        //         if (!flag_cl)
-        //         {
-        //             u_cl.confidence_val += DELTA_ETA;
-        //             flag_cl = (u_cl.confidence_val >= ETA_ON);
-        //         }
-        //         if (!flag_rl)
-        //         {
-        //             u_rl.confidence_val += DELTA_ETA;
-        //             flag_rl = (u_rl.confidence_val >= ETA_ON);
-        //         }
-        //         // get_min_rtt(0);
-        //         // get_his_rtts(0);
-        //         // TODO: acc阶段的机制还要更新
-        //         avg_rtt = static_cast<uint32_t>(get_avg_rtt(rtt_m) * 1.5);
-        //         if (static_cast<double>(avg_rtt) / min_rtt > 1 + MU)
-        //         {
-        //             set_cwnd(--optimal_cwnd, 0);
-        //         }
-        //         else
-        //         {
-        //             set_cwnd(++optimal_cwnd, 0);
-        //         }
-        //     }
+            // PROBING
+            // 3. check whether enter probing or acceleration stage
+            update_confidence_val(u_cl);
+            update_confidence_val(u_rl);
+            /*****************************/
+            FILE *file = fopen("/home/snow/pantheon-available/src/experiments/log.txt", "a");
+            if (file)
+            {
+                fprintf(file, "Current rtt = %u\n", ONE_WAY_DELAY * 2);
+                fprintf(file, "cwnd of cl, rl, prev are : %lu, %lu, %lu\n", u_cl.cwnd, u_rl.cwnd, u_prev.cwnd);
+                fprintf(file, "isright of cl, rl, prev are : %lu, %lu, %lu\n", u_cl.isright, u_rl.isright, u_prev.isright);
+                fprintf(file, "optimal_cwnd is : %lu\n", optimal_cwnd);
+                // fprintf(file, "utility of optimal, cl, rl, prev are : %.2f,%.2f,%.2f,%.2f\n", u_optimal, u_cl.utility, u_rl.utility, u_prev.utility);
+                fprintf(file, "utility of, cl, rl, prev are : %.2f,%.2f,%.2f\n", u_cl.utility, u_rl.utility, u_prev.utility);
+                fprintf(file, "confidence val of optimal, cl, rl, prev are : %.2f,%.2f\n", u_cl.confidence_val, u_rl.confidence_val);
+                fprintf(file, "----------------------------------------------------------------\n");
+            }
+            fclose(file);
+            u_prev.cwnd = optimal_cwnd;
+            // set_cwnd(optimal_cwnd, 0);
+            // uint32_t avg_rtt = static_cast<uint32_t>(get_avg_rtt());
+            // usleep(avg_rtt);
+            if (u_cl.confidence_val >= ETA_OFF && u_rl.confidence_val >= ETA_OFF)
+            {
+                // PROBING
+                set_cwnd(optimal_cwnd, 0);
+                uint32_t avg_rtt = static_cast<uint32_t>(get_avg_rtt());
+                usleep(2 * avg_rtt);
+                // get_tcp_info(0);
+                // pre_bytes_acked = static_cast<double>(info.tcpi_bytes_acked);
+                // usleep(avg_rtt);
+            }
+            else
+            {
+                // ACCELERATION
+                bool flag_cl = u_cl.confidence_val >= ETA_OFF;
+                bool flag_rl = u_rl.confidence_val >= ETA_OFF;
+                set_cwnd(optimal_cwnd, 0);
+                double avg_rtt =
+                    static_cast<uint32_t>(get_avg_rtt() * 1.5); // 直接运行1.5个RTT
+                while (!flag_cl || !flag_rl)
+                {
+                    usleep(avg_rtt);
+                    if (!flag_cl)
+                    {
+                        u_cl.confidence_val += DELTA_ETA;
+                        flag_cl = (u_cl.confidence_val >= ETA_ON);
+                    }
+                    if (!flag_rl)
+                    {
+                        u_rl.confidence_val += DELTA_ETA;
+                        flag_rl = (u_rl.confidence_val >= ETA_ON);
+                    }
+                    // get_min_rtt(0);
+                    // get_his_rtts(0);
+                    // TODO: acc阶段的机制还要更新
+                    avg_rtt = static_cast<uint32_t>(get_avg_rtt() * 1.5);
+                    if (static_cast<double>(avg_rtt) / min_rtt > 1 + MU)
+                    {
+                        set_cwnd(--optimal_cwnd, 0);
+                    }
+                    else
+                    {
+                        set_cwnd(++optimal_cwnd, 0);
+                    }
+                }
+            }
+        }
     }
     shmdt(shared_memory);
     shmctl(shmid, IPC_RMID, NULL);
