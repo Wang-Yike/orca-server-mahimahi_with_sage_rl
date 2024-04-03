@@ -139,13 +139,18 @@ double get_delta_rtt()
 {
     print_rtt();
     double res = 0.0;
-    int len = (RTT_LENGTH / 2);
-    for (int i = len; i < RTT_LENGTH; i++)
+    // 让 begin 指向第一个非0的元素
+    int begin;
+    for(begin = 0; begin < RTT_LENGTH; begin++)
+        if(his_rtts[begin])
+            break;
+    int len = ((RTT_LENGTH - begin) / 2);
+    for (int i = begin + len; i < begin + 2 * len; i++)
         res += his_rtts[i];
-    for (int i = 0; i < (RTT_LENGTH / 2); i++)
+    for (int i = begin; i < begin + len; i++)
         res -= his_rtts[i];
     if (min_rtt)
-        return (res / static_cast<double>(min_rtt) / 10);
+        return (res / static_cast<double>(min_rtt) / len);
     else
         DBGMARK(DBGSERVER, 0, "ERROR: GET_DELTA_RTT MIN_RTT=0");
     return 0;
@@ -154,11 +159,16 @@ double get_delta_rtt()
 double get_avg_rtt()
 {
     uint32_t sum = 0;
-    for (int i = 0; i < RTT_LENGTH; i++)
+    // 让 begin 指向第一个非0的元素
+    int begin;
+    for(begin = 0; begin < RTT_LENGTH; begin++)
+        if(his_rtts[begin])
+            break;
+    for (int i = begin; i < RTT_LENGTH; i++)
         if (his_rtts[i])
             sum += his_rtts[i];
 
-    return static_cast<double>(sum) / RTT_LENGTH;
+    return static_cast<double>(sum) / (RTT_LENGTH - begin);
     // 内核中的rtt估计采用的是7/8旧+1/8新
 }
 
