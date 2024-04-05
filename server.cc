@@ -34,8 +34,8 @@
 #define EXPONENT_T 0.9
 #define ALPHA 10
 #define BETA 1
-#define LAMBDA 2 //11.35
-#define MU 0.2 //0.1 // RTT的震荡范围
+#define LAMBDA 2 // 11.35
+#define MU 0.2   // 0.1 // RTT的震荡范围
 // 置信度
 #define THETA 0.05
 #define ETA_ON 0.8
@@ -126,8 +126,10 @@ void update_his_rtts(int index)
 void print_rtt()
 {
     FILE *file = fopen("/home/snow/pantheon-available/src/experiments/log.txt", "a");
-    for(int i = 0; i < RTT_LENGTH; i++){
-        if (file){
+    for (int i = 0; i < RTT_LENGTH; i++)
+    {
+        if (file)
+        {
             fprintf(file, "%d ", his_rtts[i]);
         }
     }
@@ -141,8 +143,8 @@ double get_delta_rtt()
     double res = 0.0;
     // 让 begin 指向第一个非0的元素
     int begin;
-    for(begin = 0; begin < RTT_LENGTH; begin++)
-        if(his_rtts[begin])
+    for (begin = 0; begin < RTT_LENGTH; begin++)
+        if (his_rtts[begin])
             break;
     int len = ((RTT_LENGTH - begin) / 2);
     for (int i = begin + len; i < begin + 2 * len; i++)
@@ -161,8 +163,8 @@ double get_avg_rtt()
     uint32_t sum = 0;
     // 让 begin 指向第一个非0的元素
     int begin;
-    for(begin = 0; begin < RTT_LENGTH; begin++)
-        if(his_rtts[begin])
+    for (begin = 0; begin < RTT_LENGTH; begin++)
+        if (his_rtts[begin])
             break;
     for (int i = begin; i < RTT_LENGTH; i++)
         if (his_rtts[i])
@@ -184,40 +186,48 @@ bool compareStruct(const struct utility_value &s1,
     return s1.cwnd < s2.cwnd;
 }
 
+bool compareStruct_u(const struct utility_value &s1,
+                   const struct utility_value &s2)
+{
+    return s1.utility < s2.utility;
+}
+
 u64 get_optimal_cwnd(int situation)
 {
     uint64_t optimal_cwnd = 0;
     vector<struct utility_value> utilities = {u_cl, u_rl, u_prev};
-    sort(utilities.begin(), utilities.end(), compareStruct);
-    switch (situation)
-    {
-    case 0:
-        optimal_cwnd = utilities[0].cwnd - 1;
-        break;
-    case 1:
-        // if (utilities[1].cwnd - utilities[0].cwnd <= CWND_THRESHOLD)
-            optimal_cwnd = utilities[1].utility > utilities[0].utility
-                               ? utilities[1].cwnd
-                               : utilities[0].cwnd;
-        // else
-        //     // equation 8
-        //     optimal_cwnd = (utilities[1].cwnd + utilities[0].cwnd) / 2;
-        break;
-    case 2:
-        // if (utilities[2].cwnd - utilities[1].cwnd <= CWND_THRESHOLD)
-            optimal_cwnd = utilities[2].utility > utilities[1].utility
-                               ? utilities[2].cwnd
-                               : utilities[1].cwnd;
-        // else
-        //     optimal_cwnd = (utilities[2].cwnd + utilities[1].cwnd) / 2;
-        break;
-    case 3:
-        optimal_cwnd = utilities[2].cwnd + 1;
-        break;
-    default:
-        break;
-    }
-    return optimal_cwnd;
+    sort(utilities.begin(), utilities.end(), compareStruct_u);
+    return utilities[2].cwnd;
+    // sort(utilities.begin(), utilities.end(), compareStruct);
+    // switch (situation)
+    // {
+    // case 0:
+    //     optimal_cwnd = utilities[0].cwnd - 1;
+    //     break;
+    // case 1:
+    //     // if (utilities[1].cwnd - utilities[0].cwnd <= CWND_THRESHOLD)
+    //     optimal_cwnd = utilities[1].utility > utilities[0].utility
+    //                        ? utilities[1].cwnd
+    //                        : utilities[0].cwnd;
+    //     // else
+    //     //     // equation 8
+    //     //     optimal_cwnd = (utilities[1].cwnd + utilities[0].cwnd) / 2;
+    //     break;
+    // case 2:
+    //     // if (utilities[2].cwnd - utilities[1].cwnd <= CWND_THRESHOLD)
+    //     optimal_cwnd = utilities[2].utility > utilities[1].utility
+    //                        ? utilities[2].cwnd
+    //                        : utilities[1].cwnd;
+    //     // else
+    //     //     optimal_cwnd = (utilities[2].cwnd + utilities[1].cwnd) / 2;
+    //     break;
+    // case 3:
+    //     optimal_cwnd = utilities[2].cwnd + 1;
+    //     break;
+    // default:
+    //     break;
+    // }
+    // return optimal_cwnd;
 }
 
 int get_situation()
@@ -238,7 +248,7 @@ void update_utility_value(uint64_t cwnd, utility_value *u,
 {
     update_his_rtts(0);
     double d_rtt = get_delta_rtt(); // get_delta_rtt(dq);
-    double a_rtt = get_avg_rtt(); // get_avg_rtt(dq);
+    double a_rtt = get_avg_rtt();   // get_avg_rtt(dq);
     // 单位, 当前单位为MBps
     double rate = static_cast<double>(cwnd) * mss_cache / a_rtt;
 
@@ -298,6 +308,7 @@ void *CntThread(void *i)
 
     while (send_traffic)
     {
+
         update_tcp_info(0);
         if (!slow_start_passed)
         {
@@ -308,6 +319,8 @@ void *CntThread(void *i)
         set_cwnd(info.tcpi_snd_cwnd, 0);
         // set_cwnd(target_ratio, 0);
         // usleep(min_rtt / 2);
+        // set_cwnd(150, 0);
+        // usleep(min_rtt);
 
         if (info.tcpi_rtt > 0)
         {
@@ -338,7 +351,7 @@ void *CntThread(void *i)
                 usleep(ONE_WAY_DELAY);
                 update_utility_value(first_run->cwnd, first_run,
                                      rtt_m); // 1.5RTT取first_run的u
-                ONE_WAY_DELAY = static_cast<u32>(get_avg_rtt() / 2);                     
+                ONE_WAY_DELAY = static_cast<u32>(get_avg_rtt() / 2);
                 usleep(ONE_WAY_DELAY);
                 update_utility_value(second_run->cwnd, second_run,
                                      rtt_m); // 2 RTT取second_run的u
